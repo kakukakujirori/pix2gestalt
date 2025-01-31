@@ -12,8 +12,6 @@ class Pix2GestaltDataset(Dataset):
             self,
             datadir: str,
             resolution: int,
-            center_crop: bool,
-            random_flip: bool,
             max_train_samples: Optional[int] = None,
             max_val_samples: Optional[int] = None,
             is_train: bool = True,
@@ -30,8 +28,6 @@ class Pix2GestaltDataset(Dataset):
             self.image_ids = image_ids[:train_image_num]
         else:
             self.image_ids = image_ids[train_image_num:]
-            center_crop = False
-            random_flip = False
 
         if is_train and max_train_samples is not None:
             self.image_ids = self.image_ids[:max_train_samples]
@@ -47,8 +43,6 @@ class Pix2GestaltDataset(Dataset):
         self.transforms = transforms.Compose(
         [
             transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(resolution) if center_crop else transforms.RandomCrop(resolution),
-            transforms.RandomHorizontalFlip() if random_flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]

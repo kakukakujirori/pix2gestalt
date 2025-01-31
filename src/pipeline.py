@@ -1,5 +1,5 @@
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import kornia
 import numpy as np
@@ -10,9 +10,9 @@ from packaging import version
 from torch import Tensor
 from transformers import CLIPVisionModelWithProjection
 
-from diffusers import AutoencoderKL, DiffusionPipeline, StableDiffusionMixin, UNet2DConditionModel
-from diffusers.configuration_utils import ConfigMixin, FrozenDict
-from diffusers.models.modeling_utils import ModelMixin
+from diffusers import AutoencoderKL, DiffusionPipeline, StableDiffusionMixin
+from diffusers.configuration_utils import ConfigMixin, FrozenDict, register_to_config
+from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel, UNet2DConditionOutput
 from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput
 from diffusers.schedulers import DDIMScheduler
 from diffusers.utils import (
@@ -38,15 +38,132 @@ EXAMPLE_DOC_STRING = """
 """
 
 
-class CCProjection(ModelMixin, ConfigMixin):
-    def __init__(self, in_channel=768, out_channel=768):
-        super().__init__()
-        self.in_channel = in_channel
-        self.out_channel = out_channel
-        self.cc_projection = torch.nn.Linear(in_channel, out_channel)
+class UNet2DConditionWithCCProjection(UNet2DConditionModel):
+    # __init__ arguments must all be explicit so that from_pretrained works correctly.
+    @register_to_config
+    def __init__(
+        self,
+        sample_size: Optional[Union[int, Tuple[int, int]]] = None,
+        in_channels: int = 4,
+        out_channels: int = 4,
+        center_input_sample: bool = False,
+        flip_sin_to_cos: bool = True,
+        freq_shift: int = 0,
+        down_block_types: Tuple[str] = (
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "DownBlock2D",
+        ),
+        mid_block_type: Optional[str] = "UNetMidBlock2DCrossAttn",
+        up_block_types: Tuple[str] = ("UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D"),
+        only_cross_attention: Union[bool, Tuple[bool]] = False,
+        block_out_channels: Tuple[int] = (320, 640, 1280, 1280),
+        layers_per_block: Union[int, Tuple[int]] = 2,
+        downsample_padding: int = 1,
+        mid_block_scale_factor: float = 1,
+        dropout: float = 0.0,
+        act_fn: str = "silu",
+        norm_num_groups: Optional[int] = 32,
+        norm_eps: float = 1e-5,
+        cross_attention_dim: Union[int, Tuple[int]] = 1280,
+        transformer_layers_per_block: Union[int, Tuple[int], Tuple[Tuple]] = 1,
+        reverse_transformer_layers_per_block: Optional[Tuple[Tuple[int]]] = None,
+        encoder_hid_dim: Optional[int] = None,
+        encoder_hid_dim_type: Optional[str] = None,
+        attention_head_dim: Union[int, Tuple[int]] = 8,
+        num_attention_heads: Optional[Union[int, Tuple[int]]] = None,
+        dual_cross_attention: bool = False,
+        use_linear_projection: bool = False,
+        class_embed_type: Optional[str] = None,
+        addition_embed_type: Optional[str] = None,
+        addition_time_embed_dim: Optional[int] = None,
+        num_class_embeds: Optional[int] = None,
+        upcast_attention: bool = False,
+        resnet_time_scale_shift: str = "default",
+        resnet_skip_time_act: bool = False,
+        resnet_out_scale_factor: float = 1.0,
+        time_embedding_type: str = "positional",
+        time_embedding_dim: Optional[int] = None,
+        time_embedding_act_fn: Optional[str] = None,
+        timestep_post_act: Optional[str] = None,
+        time_cond_proj_dim: Optional[int] = None,
+        conv_in_kernel: int = 3,
+        conv_out_kernel: int = 3,
+        projection_class_embeddings_input_dim: Optional[int] = None,
+        attention_type: str = "default",
+        class_embeddings_concat: bool = False,
+        mid_block_only_cross_attention: Optional[bool] = None,
+        cross_attention_norm: Optional[str] = None,
+        addition_embed_type_num_heads: int = 64,
+    ):
+        super().__init__(
+            sample_size=sample_size,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            center_input_sample=center_input_sample,
+            flip_sin_to_cos=flip_sin_to_cos,
+            freq_shift=freq_shift,
+            down_block_types=down_block_types,
+            mid_block_type=mid_block_type,
+            up_block_types=up_block_types,
+            only_cross_attention=only_cross_attention,
+            block_out_channels=block_out_channels,
+            layers_per_block=layers_per_block,
+            downsample_padding=downsample_padding,
+            mid_block_scale_factor=mid_block_scale_factor,
+            dropout=dropout,
+            act_fn=act_fn,
+            norm_num_groups=norm_num_groups,
+            norm_eps=norm_eps,
+            cross_attention_dim=cross_attention_dim,
+            transformer_layers_per_block=transformer_layers_per_block,
+            reverse_transformer_layers_per_block=reverse_transformer_layers_per_block,
+            encoder_hid_dim=encoder_hid_dim,
+            encoder_hid_dim_type=encoder_hid_dim_type,
+            attention_head_dim=attention_head_dim,
+            num_attention_heads=num_attention_heads,
+            dual_cross_attention=dual_cross_attention,
+            use_linear_projection=use_linear_projection,
+            class_embed_type=class_embed_type,
+            addition_embed_type=addition_embed_type,
+            addition_time_embed_dim=addition_time_embed_dim,
+            num_class_embeds=num_class_embeds,
+            upcast_attention=upcast_attention,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            resnet_skip_time_act=resnet_skip_time_act,
+            resnet_out_scale_factor=resnet_out_scale_factor,
+            time_embedding_type=time_embedding_type,
+            time_embedding_dim=time_embedding_dim,
+            time_embedding_act_fn=time_embedding_act_fn,
+            timestep_post_act=timestep_post_act,
+            time_cond_proj_dim=time_cond_proj_dim,
+            conv_in_kernel=conv_in_kernel,
+            conv_out_kernel=conv_out_kernel,
+            projection_class_embeddings_input_dim=projection_class_embeddings_input_dim,
+            attention_type=attention_type,
+            class_embeddings_concat=class_embeddings_concat,
+            mid_block_only_cross_attention=mid_block_only_cross_attention,
+            cross_attention_norm=cross_attention_norm,
+            addition_embed_type_num_heads=addition_embed_type_num_heads,
+        )
+        self.cc_projection = torch.nn.Linear(768, 768)
+        torch.nn.init.eye_(list(self.cc_projection.parameters())[0][:768, :768])
+        torch.nn.init.zeros_(list(self.cc_projection.parameters())[1])
 
-    def forward(self, x):
-        return self.cc_projection(x)
+    def forward(
+            self,
+            sample: torch.Tensor,
+            timestep: Union[torch.Tensor, float, int],
+            encoder_hidden_states: torch.Tensor,
+            *args, **kwargs,
+        ) -> Union[UNet2DConditionOutput, Tuple]:
+        return super().forward(
+            sample,
+            timestep,
+            self.cc_projection(encoder_hidden_states),
+            *args, **kwargs,
+        )
 
 
 class Pix2GestaltPipeline(DiffusionPipeline, StableDiffusionMixin):
@@ -54,8 +171,7 @@ class Pix2GestaltPipeline(DiffusionPipeline, StableDiffusionMixin):
         self,
         vae: AutoencoderKL,
         image_encoder: CLIPVisionModelWithProjection,
-        cc_projection: CCProjection,
-        unet: UNet2DConditionModel,
+        unet: UNet2DConditionWithCCProjection,
         scheduler: DDIMScheduler,
     ):
         super().__init__()
@@ -115,7 +231,6 @@ class Pix2GestaltPipeline(DiffusionPipeline, StableDiffusionMixin):
         self.register_modules(
             vae=vae,
             image_encoder=image_encoder,
-            cc_projection=cc_projection,
             unet=unet,
             scheduler=scheduler,
         )
@@ -187,8 +302,6 @@ class Pix2GestaltPipeline(DiffusionPipeline, StableDiffusionMixin):
         bs_embed, seq_len, _ = image_embeddings.shape
         image_embeddings = image_embeddings.repeat(1, num_images_per_prompt, 1)
         image_embeddings = image_embeddings.view(bs_embed * num_images_per_prompt, seq_len, -1)
-
-        image_embeddings = self.cc_projection(image_embeddings)
 
         # following 0123, add negative prompt after projection
         if do_classifier_free_guidance:
@@ -519,9 +632,11 @@ class Pix2GestaltPipeline(DiffusionPipeline, StableDiffusionMixin):
             image = self.decode_latents(latents)
             # 10. Convert to PIL
             image = self.numpy_to_pil(image)
-        else:
+        elif output_type == "npy":
             # 8. Post-processing
             image = self.decode_latents(latents)
+        else:
+            raise NotImplementedError(f"Invalid {output_type=}")
 
         # Offload last model to CPU
         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:

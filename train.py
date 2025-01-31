@@ -34,7 +34,7 @@ from transformers import CLIPVisionModelWithProjection
 from transformers.utils import ContextManagers
 
 import diffusers
-from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import AutoencoderKL, DDPMScheduler
 from diffusers.configuration_utils import ConfigMixin
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.optimization import get_scheduler
@@ -51,7 +51,7 @@ if is_wandb_available():
 
 from src.dataset import Pix2GestaltDataset
 from src.arguments import parse_args
-from src.pipeline import CCProjection, Pix2GestaltPipeline
+from src.pipeline import UNet2DConditionWithCCProjection, Pix2GestaltPipeline
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -128,7 +128,7 @@ logger = get_logger(__name__, log_level="INFO")
 #     model_card.save(os.path.join(repo_folder, "README.md"))
 
 
-def log_validation(vae, clip_image_encoder, cc_projection, unet, args, accelerator, val_dataloader, epoch):
+def log_validation(vae, clip_image_encoder, unet, args, accelerator, val_dataloader, epoch):
     logger.info("Running validation... ")
 
     scheduler = DDIMScheduler(
@@ -145,7 +145,6 @@ def log_validation(vae, clip_image_encoder, cc_projection, unet, args, accelerat
     pipeline = Pix2GestaltPipeline(
         vae=accelerator.unwrap_model(vae),
         image_encoder=accelerator.unwrap_model(clip_image_encoder),
-        cc_projection=accelerator.unwrap_model(cc_projection),
         unet=accelerator.unwrap_model(unet),
         scheduler=scheduler,
     )
@@ -168,20 +167,25 @@ def log_validation(vae, clip_image_encoder, cc_projection, unet, args, accelerat
             autocast_ctx = torch.autocast(accelerator.device.type)
 
         with autocast_ctx:
-            image = pipeline(
+            pred = pipeline(
                 batch['occlusion'],
                 batch['visible_object_mask'],
                 height=args.resolution,
                 width=args.resolution,
                 num_inference_steps=20,
                 generator=generator,
-            ).images[0]
+                output_type="npy",
+            ).images
 
-        images.append(image)
+        occlusion = (batch['occlusion'] / 2 + 0.5).clamp(0, 1).permute(0, 2, 3, 1).cpu().float().numpy()
+        vis_mask = (batch['visible_object_mask'] / 2 + 0.5).clamp(0, 1).permute(0, 2, 3, 1).cpu().float().numpy()
+        gt = (batch['whole'] / 2 + 0.5).clamp(0, 1).permute(0, 2, 3, 1).cpu().float().numpy()
+        ret = np.concatenate([occlusion, vis_mask, pred, gt], axis=1)
+        images.extend([x for x in ret])
 
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
-            np_images = np.stack([np.asarray(img) for img in images])
+            np_images = np.stack(images, axis=0)
             tracker.writer.add_images("validation", np_images, epoch, dataformats="NHWC")
         elif tracker.name == "wandb":
             tracker.log(
@@ -276,36 +280,34 @@ if __name__ == '__main__':
     # For now the following workaround will partially support Deepspeed ZeRO-3, by excluding the 2
     # frozen models from being partitioned during `zero.Init` which gets called during
     # `from_pretrained` So CLIPVisionModelWithProjection and AutoencoderKL will not enjoy the parameter sharding
-    # across multiple gpus and only UNet2DConditionModel will get ZeRO sharded.
+    # across multiple gpus and only CLIPVisionModelWithProjection will get ZeRO sharded.
     with ContextManagers(deepspeed_zero_init_disabled_context_manager()):
         clip_image_encoder = CLIPVisionModelWithProjection.from_pretrained(
-            "openai/clip-vit-large-patch14"
+            args.pretrained_model_name_or_path, subfolder="image_encoder", revision=args.revision, variant=args.variant
         )
         vae = AutoencoderKL.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
         )
 
-    cc_projection = CCProjection()
-    unet = UNet2DConditionModel.from_pretrained(
+    unet = UNet2DConditionWithCCProjection.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision,
         in_channels=12, sample_size=args.resolution, low_cpu_mem_usage=False, ignore_mismatched_sizes=True,
     )
 
-    # Freeze vae and clip_image_encoder and set unet and cc_projection to trainable
+    # Freeze vae and clip_image_encoder and set unet to trainable
     vae.requires_grad_(False)
     clip_image_encoder.requires_grad_(False)
-    cc_projection.train()
     unet.train()
 
     # Create EMA for the unet.
     if args.use_ema:
-        ema_unet = UNet2DConditionModel.from_pretrained(
+        ema_unet = UNet2DConditionWithCCProjection.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant,
             in_channels=12, sample_size=args.resolution, low_cpu_mem_usage=False, ignore_mismatched_sizes=True,
         )
         ema_unet = EMAModel(
             ema_unet.parameters(),
-            model_cls=UNet2DConditionModel,
+            model_cls=UNet2DConditionWithCCProjection,
             model_config=ema_unet.config,
             foreach=args.foreach_ema,
         )
@@ -332,9 +334,7 @@ if __name__ == '__main__':
                     ema_unet.save_pretrained(os.path.join(output_dir, "unet_ema"))
 
                 for i, model in enumerate(models):
-                    if isinstance(model, CCProjection):
-                        model.save_pretrained(os.path.join(output_dir, "cc_proj"))
-                    elif isinstance(model, UNet2DConditionModel):
+                    if isinstance(model, UNet2DConditionWithCCProjection):
                         model.save_pretrained(os.path.join(output_dir, "unet"))
                     else:
                         raise NotImplementedError(f"[save_model_hook] Invalid model: {type(model)}")
@@ -345,7 +345,7 @@ if __name__ == '__main__':
         def load_model_hook(models, input_dir):
             if args.use_ema:
                 load_model = EMAModel.from_pretrained(
-                    os.path.join(input_dir, "unet_ema"), UNet2DConditionModel, foreach=args.foreach_ema
+                    os.path.join(input_dir, "unet_ema"), UNet2DConditionWithCCProjection, foreach=args.foreach_ema
                 )
                 ema_unet.load_state_dict(load_model.state_dict())
                 if args.offload_ema:
@@ -359,10 +359,8 @@ if __name__ == '__main__':
                 model = models.pop()
 
                 # load diffusers style into model
-                if isinstance(model, CCProjection):
-                    load_model = CCProjection.from_pretrained(input_dir, subfolder="cc_proj")
-                elif isinstance(model, UNet2DConditionModel):
-                    load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
+                if isinstance(model, UNet2DConditionWithCCProjection):
+                    load_model = UNet2DConditionWithCCProjection.from_pretrained(input_dir, subfolder="unet")
                 else:
                     raise NotImplementedError(f"[load_model_hook] Unknown model: {type(model)}")
                 model.register_to_config(**load_model.config)
@@ -400,7 +398,8 @@ if __name__ == '__main__':
         optimizer_cls = torch.optim.AdamW
 
     optimizer = optimizer_cls(
-        unet.parameters(),
+        [{"params": list(set(unet.parameters()) - set(unet.cc_projection.parameters())), "lr": args.learning_rate},
+         {"params": unet.cc_projection.parameters(), "lr": 10. * args.learning_rate}],
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -412,16 +411,12 @@ if __name__ == '__main__':
         train_dataset = Pix2GestaltDataset(
             args.train_data_dir,
             resolution=args.resolution,
-            center_crop=args.center_crop,
-            random_flip=args.random_flip,
             max_train_samples=args.max_train_samples,
             is_train=True,
         )
         val_dataset = Pix2GestaltDataset(
             args.train_data_dir,
             resolution=args.resolution,
-            center_crop=args.center_crop,
-            random_flip=args.random_flip,
             max_val_samples=args.max_val_samples,
             is_train=False,
         )
@@ -460,8 +455,8 @@ if __name__ == '__main__':
     )
 
     # Prepare everything with our `accelerator`.
-    unet, cc_projection, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
-        unet, cc_projection, optimizer, train_dataloader, val_dataloader, lr_scheduler
+    unet, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
+        unet, optimizer, train_dataloader, val_dataloader, lr_scheduler
     )
 
     if args.use_ema:
@@ -482,7 +477,6 @@ if __name__ == '__main__':
 
     # Move image_encode and vae to gpu and cast to weight_dtype
     clip_image_encoder.to(accelerator.device, dtype=weight_dtype)
-    cc_projection.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -552,7 +546,7 @@ if __name__ == '__main__':
 
     else:
         initial_global_step = 0
-    print(f"{initial_global_step=}")
+
     progress_bar = tqdm(
         range(0, args.max_train_steps),
         initial=initial_global_step,
@@ -593,8 +587,7 @@ if __name__ == '__main__':
                     noisy_latents = noise_scheduler.add_noise(target_latents, noise, timesteps)
 
                 # Get the image embedding for conditioning
-                clip_emb = clip_image_encoder(Pix2GestaltPipeline.CLIP_preprocess(batch["occlusion"])).image_embeds.float().unsqueeze(1) #.tile(n_samples,1,1)
-                encoder_hidden_states = cc_projection(clip_emb)
+                encoder_hidden_states = clip_image_encoder(Pix2GestaltPipeline.CLIP_preprocess(batch["occlusion"])).image_embeds.unsqueeze(1)
 
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
@@ -710,7 +703,6 @@ if __name__ == '__main__':
                 log_validation(
                     vae,
                     clip_image_encoder,
-                    cc_projection,
                     unet,
                     args,
                     accelerator,
@@ -742,7 +734,6 @@ if __name__ == '__main__':
         pipeline = Pix2GestaltPipeline(
             vae=accelerator.unwrap_model(vae),
             image_encoder=accelerator.unwrap_model(clip_image_encoder),
-            cc_projection=accelerator.unwrap_model(cc_projection),
             unet=accelerator.unwrap_model(unet),
             scheduler=scheduler,
         )
