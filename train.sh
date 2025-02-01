@@ -6,6 +6,7 @@ accelerate launch \
     --output_dir pix2gestalt-finetuned \
     --resolution 256 \
     --train_batch_size 24 \
+    --val_batch_size 8 \
     --num_train_epochs 100 \
     --gradient_accumulation_steps 4 \
     --learning_rate 1e-4 \

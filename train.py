@@ -122,6 +122,7 @@ logger = get_logger(__name__, log_level="INFO")
 #     model_card.save(os.path.join(repo_folder, "README.md"))
 
 
+@torch.inference_mode()
 def log_validation(vae, clip_image_encoder, unet, args, accelerator, val_dataloader, epoch):
     logger.info("Running validation... ")
 
@@ -161,9 +162,10 @@ def log_validation(vae, clip_image_encoder, unet, args, accelerator, val_dataloa
             autocast_ctx = torch.autocast(accelerator.device.type)
 
         with autocast_ctx:
+            dtype = next(pipeline.image_encoder.parameters()).dtype
             pred = pipeline(
-                batch['occlusion'],
-                batch['visible_object_mask'],
+                batch['occlusion'].to(dtype),
+                batch['visible_object_mask'].to(dtype),
                 height=args.resolution,
                 width=args.resolution,
                 num_inference_steps=20,
@@ -436,7 +438,7 @@ def main():
     val_dataloader = torch.utils.data.DataLoader(
         val_dataset,
         shuffle=False,
-        batch_size=args.train_batch_size,
+        batch_size=args.val_batch_size,
         num_workers=args.dataloader_num_workers,
     )
 
@@ -694,27 +696,28 @@ def main():
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
 
+            # validation
+            if accelerator.is_main_process:
+                if global_step % args.validation_steps == 0:
+                    if args.use_ema:
+                        # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
+                        ema_unet.store(unet.parameters())
+                        ema_unet.copy_to(unet.parameters())
+                    log_validation(
+                        vae,
+                        clip_image_encoder,
+                        unet,
+                        args,
+                        accelerator,
+                        val_dataloader,
+                        global_step,
+                    )
+                    if args.use_ema:
+                        # Switch back to the original UNet parameters.
+                        ema_unet.restore(unet.parameters())
+
             if global_step >= args.max_train_steps:
                 break
-
-        if accelerator.is_main_process:
-            if global_step % args.validation_steps == 0:
-                if args.use_ema:
-                    # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
-                    ema_unet.store(unet.parameters())
-                    ema_unet.copy_to(unet.parameters())
-                log_validation(
-                    vae,
-                    clip_image_encoder,
-                    unet,
-                    args,
-                    accelerator,
-                    val_dataloader,
-                    global_step,
-                )
-                if args.use_ema:
-                    # Switch back to the original UNet parameters.
-                    ema_unet.restore(unet.parameters())
 
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
