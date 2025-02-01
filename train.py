@@ -4,7 +4,6 @@ Taken from diffusers/examples/text_to_image/train_text_to_image.py
 from typing import Optional
 import logging
 import math
-import glob
 import os
 import random
 import shutil
@@ -13,7 +12,6 @@ from pathlib import Path
 
 import accelerate
 import datasets
-import kornia
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -26,8 +24,6 @@ from accelerate.utils import ProjectConfiguration, set_seed
 from datasets import load_dataset
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
-from PIL import Image
-from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPVisionModelWithProjection
@@ -35,8 +31,6 @@ from transformers.utils import ContextManagers
 
 import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler
-from diffusers.configuration_utils import ConfigMixin
-from diffusers.models.modeling_utils import ModelMixin
 from diffusers.optimization import get_scheduler
 from diffusers.schedulers import DDIMScheduler
 from diffusers.training_utils import EMAModel, compute_dream_and_update_latents, compute_snr
@@ -205,7 +199,7 @@ def log_validation(vae, clip_image_encoder, unet, args, accelerator, val_dataloa
     return images
 
 
-if __name__ == '__main__':
+def main():
     args = parse_args()
 
     if args.report_to == "wandb" and args.hub_token is not None:
@@ -214,6 +208,15 @@ if __name__ == '__main__':
             " Please use `huggingface-cli login` to authenticate with the Hub."
         )
 
+    if args.non_ema_revision is not None:
+        deprecate(
+            "non_ema_revision!=None",
+            "0.15.0",
+            message=(
+                "Downloading 'non_ema' weights from revision branches of the Hub is deprecated. Please make sure to"
+                " use `--variant=non_ema` instead."
+            ),
+        )
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
 
     accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
@@ -333,14 +336,16 @@ if __name__ == '__main__':
                 if args.use_ema:
                     ema_unet.save_pretrained(os.path.join(output_dir, "unet_ema"))
 
-                for i, model in enumerate(models):
-                    if isinstance(model, UNet2DConditionWithCCProjection):
-                        model.save_pretrained(os.path.join(output_dir, "unet"))
+                for model in models:
+                    if isinstance(unwrap_model(model), UNet2DConditionWithCCProjection):
+                        model = unwrap_model(model)
+                        model.save_pretrained(os.path.join(output_dir, "unet"), safe_serialization=True, max_shard_size="5GB")
                     else:
                         raise NotImplementedError(f"[save_model_hook] Invalid model: {type(model)}")
 
                     # make sure to pop weight so that corresponding model is not saved again
-                    weights.pop()
+                    if weights:
+                        weights.pop()
 
         def load_model_hook(models, input_dir):
             if args.use_ema:
@@ -359,7 +364,7 @@ if __name__ == '__main__':
                 model = models.pop()
 
                 # load diffusers style into model
-                if isinstance(model, UNet2DConditionWithCCProjection):
+                if isinstance(unwrap_model(model), UNet2DConditionWithCCProjection):
                     load_model = UNet2DConditionWithCCProjection.from_pretrained(input_dir, subfolder="unet")
                 else:
                     raise NotImplementedError(f"[load_model_hook] Unknown model: {type(model)}")
@@ -398,7 +403,7 @@ if __name__ == '__main__':
         optimizer_cls = torch.optim.AdamW
 
     optimizer = optimizer_cls(
-        [{"params": list(set(unet.parameters()) - set(unet.cc_projection.parameters())), "lr": args.learning_rate},
+        [{"params": [p for n, p in unet.named_parameters() if "cc_projection" not in n], "lr": args.learning_rate},
          {"params": unet.cc_projection.parameters(), "lr": 10. * args.learning_rate}],
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
@@ -686,16 +691,14 @@ if __name__ == '__main__':
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
                 break
 
-
         if accelerator.is_main_process:
-            if epoch % args.validation_epochs == 0:
+            if global_step % args.validation_steps == 0:
                 if args.use_ema:
                     # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
                     ema_unet.store(unet.parameters())
@@ -749,3 +752,7 @@ if __name__ == '__main__':
         #     )
 
     accelerator.end_training()
+
+
+if __name__ == "__main__":
+    main()

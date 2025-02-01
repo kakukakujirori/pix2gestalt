@@ -5,9 +5,9 @@ accelerate launch \
     --max_val_samples 8 \
     --output_dir pix2gestalt-finetuned \
     --resolution 256 \
-    --train_batch_size 64 \
+    --train_batch_size 24 \
     --num_train_epochs 100 \
-    --gradient_accumulation_steps 1 \
+    --gradient_accumulation_steps 4 \
     --learning_rate 1e-4 \
     --use_8bit_adam \
     --allow_tf32 \
@@ -18,5 +18,6 @@ accelerate launch \
     --mixed_precision bf16 \
     --checkpoints_total_limit 4 \
     --enable_xformers_memory_efficient_attention \
-    --checkpointing_steps 5000 \
-    # --resume_from_checkpoint latest
+    --validation_steps 500 \
+    --checkpointing_steps 500 \
+    --resume_from_checkpoint latest

@@ -250,10 +250,10 @@ def parse_args(additional_args: list[str] = []):
     )
     parser.add_argument("--noise_offset", type=float, default=0, help="The scale of noise offset.")
     parser.add_argument(
-        "--validation_epochs",
+        "--validation_steps",
         type=int,
-        default=1,
-        help="Run validation every X epochs.",
+        default=500,
+        help="Run validation every X steps.",
     )
     parser.add_argument(
         "--tracker_project_name",
