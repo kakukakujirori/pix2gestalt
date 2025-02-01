@@ -159,13 +159,13 @@ def log_validation(vae, clip_image_encoder, unet, args, accelerator, val_dataloa
         if torch.backends.mps.is_available():
             autocast_ctx = nullcontext()
         else:
-            autocast_ctx = torch.autocast(accelerator.device.type)
+            dtype = next(pipeline.image_encoder.parameters()).dtype
+            autocast_ctx = torch.autocast(accelerator.device.type, dtype=dtype)  # DTYPE AUTOCAST NEEDED
 
         with autocast_ctx:
-            dtype = next(pipeline.image_encoder.parameters()).dtype
             pred = pipeline(
-                batch['occlusion'].to(dtype),
-                batch['visible_object_mask'].to(dtype),
+                batch['occlusion'],
+                batch['visible_object_mask'],
                 height=args.resolution,
                 width=args.resolution,
                 num_inference_steps=20,
