@@ -5,10 +5,10 @@ accelerate launch \
     --max_val_samples 8 \
     --output_dir pix2gestalt-finetuned \
     --resolution 256 \
-    --train_batch_size 24 \
+    --train_batch_size 16 \
     --val_batch_size 8 \
     --num_train_epochs 100 \
-    --gradient_accumulation_steps 4 \
+    --gradient_accumulation_steps 6 \
     --learning_rate 1e-4 \
     --use_8bit_adam \
     --allow_tf32 \
@@ -16,7 +16,7 @@ accelerate launch \
     --offload_ema \
     --foreach_ema \
     --dataloader_num_workers 32 \
-    --mixed_precision bf16 \
+    --mixed_precision no \
     --checkpoints_total_limit 4 \
     --enable_xformers_memory_efficient_attention \
     --validation_steps 500 \

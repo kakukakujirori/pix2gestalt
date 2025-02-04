@@ -126,16 +126,7 @@ logger = get_logger(__name__, log_level="INFO")
 def log_validation(vae, clip_image_encoder, unet, args, accelerator, val_dataloader, epoch):
     logger.info("Running validation... ")
 
-    scheduler = DDIMScheduler(
-        beta_end=0.085,
-        beta_schedule="scaled_linear",
-        beta_start=0.02,
-        num_train_timesteps=1000,
-        steps_offset=1,
-        clip_sample=False,
-        set_alpha_to_one=False,
-        prediction_type="epsilon",
-    )
+    scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
 
     pipeline = Pix2GestaltPipeline(
         vae=accelerator.unwrap_model(vae),
@@ -726,16 +717,7 @@ def main():
         if args.use_ema:
             ema_unet.copy_to(unet.parameters())
 
-        scheduler = DDIMScheduler(
-            beta_end=0.085,
-            beta_schedule="scaled_linear",
-            beta_start=0.02,
-            num_train_timesteps=1000,
-            steps_offset=1,
-            clip_sample=False,
-            set_alpha_to_one=False,
-            prediction_type="epsilon",
-        )
+        scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
 
         pipeline = Pix2GestaltPipeline(
             vae=accelerator.unwrap_model(vae),

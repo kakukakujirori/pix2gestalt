@@ -81,7 +81,7 @@ def parse_args(additional_args: list[str] = []):
     parser.add_argument(
         "--val_batch_size", type=int, default=4, help="Batch size (per device) for the validation dataloader."
     )
-    parser.add_argument("--num_train_epochs", type=int, default=100)
+    parser.add_argument("--num_train_epochs", type=int, default=5)
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -121,7 +121,7 @@ def parse_args(additional_args: list[str] = []):
         ),
     )
     parser.add_argument(
-        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
+        "--lr_warmup_steps", type=int, default=100, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument(
         "--snr_gamma",
