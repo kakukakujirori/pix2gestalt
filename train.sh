@@ -7,7 +7,7 @@ accelerate launch \
     --resolution 256 \
     --train_batch_size 16 \
     --val_batch_size 8 \
-    --num_train_epochs 100 \
+    --num_train_epochs 5 \
     --gradient_accumulation_steps 6 \
     --learning_rate 1e-4 \
     --use_8bit_adam \

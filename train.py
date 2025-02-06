@@ -30,7 +30,7 @@ from transformers import CLIPVisionModelWithProjection
 from transformers.utils import ContextManagers
 
 import diffusers
-from diffusers import AutoencoderKL, DDPMScheduler
+from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
 from diffusers.schedulers import DDIMScheduler
 from diffusers.training_utils import EMAModel, compute_dream_and_update_latents, compute_snr
@@ -285,10 +285,16 @@ def main():
             args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
         )
 
+    unet_ori = UNet2DConditionModel.from_pretrained(
+        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision,
+    )
     unet = UNet2DConditionWithCCProjection.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision,
         in_channels=12, sample_size=args.resolution, low_cpu_mem_usage=False, ignore_mismatched_sizes=True,
     )
+    with torch.no_grad():
+        unet.conv_in.weight.zero_()
+        unet.conv_in.weight[:, :4, :, :].copy_(unet_ori.conv_in.weight)
 
     # Freeze vae and clip_image_encoder and set unet to trainable
     vae.requires_grad_(False)
@@ -301,12 +307,17 @@ def main():
             args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant,
             in_channels=12, sample_size=args.resolution, low_cpu_mem_usage=False, ignore_mismatched_sizes=True,
         )
+        with torch.no_grad():
+            ema_unet.conv_in.weight.zero_()
+            ema_unet.conv_in.weight[:, :4, :, :].copy_(unet_ori.conv_in.weight)
         ema_unet = EMAModel(
             ema_unet.parameters(),
             model_cls=UNet2DConditionWithCCProjection,
             model_config=ema_unet.config,
             foreach=args.foreach_ema,
         )
+
+    del unet_ori
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -688,7 +699,7 @@ def main():
             progress_bar.set_postfix(**logs)
 
             # validation
-            if accelerator.is_main_process:
+            if accelerator.sync_gradients and accelerator.is_main_process:
                 if global_step % args.validation_steps == 0:
                     if args.use_ema:
                         # Store the UNet parameters temporarily and load the EMA parameters to perform inference.

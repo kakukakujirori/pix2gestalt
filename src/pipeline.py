@@ -10,7 +10,7 @@ from packaging import version
 from torch import Tensor
 from transformers import CLIPVisionModelWithProjection
 
-from diffusers import AutoencoderKL, DiffusionPipeline, StableDiffusionMixin
+from diffusers import AutoencoderKL, DiffusionPipeline, ModelMixin, StableDiffusionMixin
 from diffusers.configuration_utils import ConfigMixin, FrozenDict, register_to_config
 from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel, UNet2DConditionOutput
 from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput
@@ -37,8 +37,7 @@ EXAMPLE_DOC_STRING = """
         ```
 """
 
-
-class UNet2DConditionWithCCProjection(UNet2DConditionModel):
+class UNet2DConditionWithCCProjection(UNet2DConditionModel, ModelMixin):  # NOTE: ModelMixin somehow needs to be loaded every time for weight loading?
     # __init__ arguments must all be explicit so that from_pretrained works correctly.
     @register_to_config
     def __init__(
