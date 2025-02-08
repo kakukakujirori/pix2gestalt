@@ -1,0 +1,11 @@
+accelerate
+bitsandbytes
+datasets
+jaxtyping
+kornia
+diffusers
+torch
+torchvision
+transformers
+wandb
+xformers
