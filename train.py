@@ -159,7 +159,7 @@ def log_validation(vae, clip_image_encoder, unet, args, accelerator, val_dataloa
                 batch['visible_object_mask'],
                 height=args.resolution,
                 width=args.resolution,
-                num_inference_steps=20,
+                num_inference_steps=200,
                 generator=generator,
                 output_type="npy",
             ).images
@@ -568,11 +568,14 @@ def main():
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
-                # Convert images and masks to latent space
-                occlusion_latents = vae.encode(batch["occlusion"].to(weight_dtype)).latent_dist.sample()
-                visible_object_mask_latents = vae.encode(batch["visible_object_mask"].to(weight_dtype)).latent_dist.sample()
+                # Convert images and masks to latent space (NOTE: cond_latents are from the mode, target_latents are from sampling)
+                occlusion_latents = vae.encode(batch["occlusion"].to(weight_dtype)).latent_dist.mode()
+                visible_object_mask_latents = vae.encode(batch["visible_object_mask"].to(weight_dtype)).latent_dist.mode()
                 cond_latents = torch.cat([occlusion_latents, visible_object_mask_latents], dim=1)
                 target_latents = vae.encode(batch["whole"].to(weight_dtype)).latent_dist.sample()
+
+                # Only target_latents require scaling (NOTE: Probably to align the scale with cond_latents)
+                target_latents *= vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(target_latents)
@@ -597,6 +600,14 @@ def main():
 
                 # Get the image embedding for conditioning
                 encoder_hidden_states = clip_image_encoder(Pix2GestaltPipeline.CLIP_preprocess(batch["occlusion"])).image_embeds.unsqueeze(1)
+
+                # To support classifier-free guidance, randomly drop out only clip conditioning 5%, only image conditioning 5%, and both 5%.
+                uncond_prob = 0.05
+                random = torch.rand(bsz, device=accelerator.device)
+                prompt_mask = (random < 2 * uncond_prob)
+                input_mask = (uncond_prob <= random) * (random < 3 * uncond_prob)
+                encoder_hidden_states[prompt_mask] = 0
+                cond_latents[input_mask] = 0
 
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
