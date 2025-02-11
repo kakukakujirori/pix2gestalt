@@ -238,6 +238,11 @@ def parse_args(additional_args: list[str] = []):
         help="Start for the LPIPS metric",
     )
     parser.add_argument(
+        "--freeze_encoder",
+        action="store_true",
+        help="Freeze the encoder and only finetune the decoder.",
+    )
+    parser.add_argument(
         "--dataloader_num_workers",
         type=int,
         default=0,

@@ -66,7 +66,7 @@ def log_validation(vae, args, repo_id, accelerator, test_dataloader, weight_dtyp
             autocast_ctx = torch.autocast(accelerator.device.type, dtype=dtype)  # DTYPE AUTOCAST NEEDED
 
         with autocast_ctx:
-            reconst = vae_model(batch["pixel_values"]).sample
+            reconst = vae_model(batch["pixel_values"], sample_posterior=False).sample
 
         x = (batch["pixel_values"] / 2 + 0.5).clamp(0, 1).permute(0, 2, 3, 1).cpu().float().numpy()
         reconst = (reconst / 2 + 0.5).clamp(0, 1).permute(0, 2, 3, 1).cpu().float().numpy()
@@ -250,8 +250,13 @@ def main():
             foreach=args.foreach_ema,
         )
 
-    vae.requires_grad_(True)
-    vae.train()
+    if args.freeze_encoder:
+        vae.encoder.requires_grad_(False)
+        vae.decoder.requires_grad_(True)
+        vae.decoder.train()
+    else:
+        vae.requires_grad_(True)
+        vae.train()
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -341,7 +346,7 @@ def main():
         optimizer_cls = torch.optim.AdamW
 
     optimizer = optimizer_cls(
-        vae.parameters(),
+        vae.decoder.parameters() if args.freeze_encoder else vae.parameters(),
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,

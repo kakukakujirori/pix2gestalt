@@ -21,4 +21,5 @@ accelerate launch \
     --enable_xformers_memory_efficient_attention \
     --validation_steps 500 \
     --checkpointing_steps 500 \
+    --freeze_encoder \
     --resume_from_checkpoint latest
