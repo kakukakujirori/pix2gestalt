@@ -43,8 +43,8 @@ from diffusers.utils.torch_utils import is_compiled_module
 if is_wandb_available():
     import wandb
 
-from src.dataset import Pix2GestaltDataset
-from src.arguments import parse_args
+from pix2gestalt_dataset import Pix2GestaltDataset
+from arguments_unet import parse_args
 from src.pipeline import UNet2DConditionWithCCProjection, Pix2GestaltPipeline
 
 logger = get_logger(__name__, log_level="INFO")
